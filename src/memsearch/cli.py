@@ -574,7 +574,7 @@ def _extract_section(
     # Find section start — walk backward to the heading
     section_start = start_line - 1  # 0-indexed
     if heading_level > 0:
-        for i in range(start_line - 2, -1, -1):
+        for i in range(start_line - 1, -1, -1):
             line = all_lines[i]
             if line.startswith("#"):
                 level = len(line) - len(line.lstrip("#"))
