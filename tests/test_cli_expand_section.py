@@ -75,3 +75,34 @@ def test_expand_returns_the_chunks_own_section_and_anchor(monkeypatch, tmp_path)
     assert data["start_line"] == 7
     assert data["content"].startswith("### 10:05")
     assert data["anchor"]["turn"] == "t2"
+
+
+def test_extract_section_ignores_hash_prefixed_non_heading_lines() -> None:
+    para = "Deployment notes for the staging cluster and the rollback steps we agreed on. " * 3
+    text = "\n".join(["## Notes", "", para.strip(), "", "#followup " + para.strip(), "", "## Next", "other"])
+    chunk = next(
+        c
+        for c in chunk_markdown(text, "notes.md", max_chunk_size=400, overlap_lines=0)
+        if c.content.startswith("#followup")
+    )
+
+    content, start, end = _extract_section(text.splitlines(), chunk.start_line, chunk.heading_level)
+
+    assert (start, end) == (1, 6)
+    assert content.startswith("## Notes")
+
+
+def test_extract_section_does_not_end_at_hash_prefixed_non_heading_line() -> None:
+    lines = ["## A", "text", "#tag not a heading", "more", "## B", "other"]
+
+    content, start, end = _extract_section(lines, 1, 2)
+
+    assert (start, end) == (1, 4)
+    assert content.endswith("more")
+
+
+def test_extract_section_tolerates_start_line_past_end_of_file() -> None:
+    content, start, end = _extract_section(["## A", "text"], 3, 2)
+
+    assert (start, end) == (1, 2)
+    assert content == "## A\ntext"
