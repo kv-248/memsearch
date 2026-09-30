@@ -500,6 +500,13 @@ def expand(
             sys.exit(1)
 
         all_lines = read_utf8_text_replace(source_path).splitlines()
+        if start_line > len(all_lines):
+            click.echo(
+                f"Warning: chunk start_line {start_line} is past the end of {source} "
+                f"({len(all_lines)} lines); the index is out of sync with the file. "
+                "Re-run 'memsearch index <path>' to refresh it.",
+                err=True,
+            )
 
         if lines is not None:
             # Show N lines before/after the chunk
