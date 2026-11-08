@@ -68,6 +68,23 @@ class _MarkdownHandler(FileSystemEventHandler):
         if not event.is_directory and self._is_markdown(event.src_path):
             self._schedule("deleted", event.src_path)
 
+    def on_moved(self, event: FileSystemEvent) -> None:
+        """Reindex markdown that arrives via rename or atomic replace.
+
+        Watchdog reports ``os.replace(temp, note.md)`` and ``os.rename`` as a
+        single move. Those paths never pass through ``on_created``,
+        ``on_modified``, or ``on_deleted``, so ignoring the move leaves the
+        index pointing at the old file.
+        """
+        if event.is_directory:
+            return
+        src = event.src_path
+        dest = event.dest_path
+        if self._is_markdown(src):
+            self._schedule("deleted", src)
+        if dest and self._is_markdown(dest) and self._should_process(dest):
+            self._schedule("modified", dest)
+
     def cancel_all(self) -> None:
         """Cancel all pending debounce timers."""
         with self._lock:
