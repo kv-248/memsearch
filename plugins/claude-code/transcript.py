@@ -119,11 +119,15 @@ def find_turn_context(
 ) -> tuple[list[Turn], int]:
     """Find a turn by UUID and return surrounding context turns.
 
+    *target_uuid* is a prefix of the stored id. Matching the other direction,
+    or only the first eight characters, returns an earlier turn that merely
+    shares that stem.
+
     Returns (context_turns, target_index_in_result).
     """
     target_idx = -1
     for i, turn in enumerate(turns):
-        if turn.uuid.startswith(target_uuid) or target_uuid.startswith(turn.uuid[:8]):
+        if turn.uuid.startswith(target_uuid):
             target_idx = i
             break
 

@@ -240,10 +240,17 @@ def parse_transcript(path: str | Path) -> list[Turn]:
 
 
 def select_turns(turns: list[Turn], turn_id: str | None, context: int) -> list[Turn]:
+    """Return turns around the first id that starts with *turn_id*.
+
+    ``--turn`` is a prefix of the stored id (an exact id is a prefix of
+    itself). The query must not be compared the other way, and not against
+    only the first eight characters: that selects an earlier turn whose id
+    merely shares that stem.
+    """
     if not turn_id:
         return turns
     for i, t in enumerate(turns):
-        if t.uuid and (t.uuid.startswith(turn_id) or turn_id.startswith(t.uuid[:8])):
+        if t.uuid.startswith(turn_id):
             return turns[max(0, i - context) : i + context + 1]
     return turns  # turn not found (e.g. format has no per-turn ids) → return all
 

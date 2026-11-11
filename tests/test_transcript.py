@@ -77,6 +77,33 @@ def test_find_turn_context_supports_uuid_prefix() -> None:
     assert idx == 1
 
 
+def test_find_turn_context_does_not_match_a_different_id_with_the_same_prefix() -> None:
+    turns = [
+        type("T", (), {"uuid": "aaaaaaaa-1111-1111-1111-111111111111"})(),
+        type("T", (), {"uuid": "aaaaaaaa-2222-2222-2222-222222222222"})(),
+        type("T", (), {"uuid": "m1"})(),
+        type("T", (), {"uuid": "m10"})(),
+    ]
+
+    context, idx = find_turn_context(turns, "aaaaaaaa-2222-2222-2222-222222222222", context=0)
+    assert idx == 0
+    assert context[0].uuid.endswith("2222-2222-2222-222222222222")
+
+    context, idx = find_turn_context(turns, "m10", context=0)
+    assert idx == 0
+    assert context[0].uuid == "m10"
+
+    # A turn with no id used to match every query, because any string
+    # starts with the empty prefix of uuid[:8].
+    blank_then_real = [
+        type("T", (), {"uuid": ""})(),
+        type("T", (), {"uuid": "cccccccc-4444-4444-4444-444444444444"})(),
+    ]
+    context, idx = find_turn_context(blank_then_real, "cccccccc-4444", context=0)
+    assert idx == 0
+    assert context[0].uuid.startswith("cccccccc-4444")
+
+
 def test_helpers_format_and_summarize() -> None:
     assert _strip_hook_tags("<command-x>rm</command-x>keep") == "keep"
     assert _extract_time("2026-03-07T05:10:11.123Z") == "05:10:11"

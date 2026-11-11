@@ -134,6 +134,32 @@ def test_select_turns_by_id(tmp_path: Path) -> None:
     assert [t.text for t in sel] == ["two"]
 
 
+def test_select_turns_prefix_does_not_stop_at_a_shared_eight_char_stem() -> None:
+    """A later id that only shares the first eight characters must not lose to an earlier turn.
+
+    ``--turn`` is a prefix of the stored id. Comparing the query against only
+    ``uuid[:8]`` in the other direction selects the first turn whose id begins
+    with those characters, even when the rest of the query names a later turn.
+    """
+    first = "aaaaaaaa-1111-1111-1111-111111111111"
+    second = "aaaaaaaa-2222-2222-2222-222222222222"
+    third = "bbbbbbbb-3333-3333-3333-333333333333"
+    turns = [
+        tr.Turn(role="user", uuid=first, text="first"),
+        tr.Turn(role="user", uuid=second, text="second"),
+        tr.Turn(role="user", uuid="m1", text="one"),
+        tr.Turn(role="user", uuid="m10", text="ten"),
+        tr.Turn(role="user", uuid=third, text="third"),
+    ]
+
+    assert [t.text for t in tr.select_turns(turns, second, context=0)] == ["second"]
+    assert [t.text for t in tr.select_turns(turns, "aaaaaaaa-2222", context=0)] == ["second"]
+    assert [t.text for t in tr.select_turns(turns, "m10", context=0)] == ["ten"]
+    # A short prefix is still the first stored id that begins with it.
+    assert [t.text for t in tr.select_turns(turns, "aaaaaaaa", context=0)] == ["first"]
+    assert [t.text for t in tr.select_turns(turns, "bbbbbbbb", context=1)] == ["ten", "third"]
+
+
 def test_tool_output_is_clipped(tmp_path: Path) -> None:
     p = _write(
         tmp_path / "c.jsonl",
