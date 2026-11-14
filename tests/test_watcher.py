@@ -1,10 +1,12 @@
 """Tests for the file watcher module."""
 
+import os
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from watchdog.events import FileSystemEvent
+from watchdog.events import DirMovedEvent, FileMovedEvent, FileSystemEvent
 
 from memsearch.watcher import DEFAULT_DEBOUNCE_MS, FileWatcher, _MarkdownHandler
 
@@ -18,6 +20,20 @@ def _make_event(src_path: str, is_directory: bool = False) -> FileSystemEvent:
     ev = FileSystemEvent(src_path)
     ev.is_directory = is_directory
     return ev
+
+
+def _join_timers(handler: _MarkdownHandler) -> None:
+    for timer in list(handler._timers.values()):
+        timer.join()
+
+
+def _wait_until(predicate, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.02)
+    raise AssertionError("condition was not met before timeout")
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +194,56 @@ class TestMarkdownHandler:
         # Callback should never have been invoked
         callback.assert_not_called()
 
+    def test_on_moved_drops_old_markdown_and_indexes_destination(self):
+        """A rename is a move event, not a delete plus a create."""
+        callback = MagicMock()
+        handler = _MarkdownHandler(callback, debounce_ms=10)
+
+        handler.on_moved(FileMovedEvent("/tmp/old-note.md", "/tmp/new-note.md"))
+        _join_timers(handler)
+
+        assert callback.call_count == 2
+        callback.assert_any_call("deleted", Path("/tmp/old-note.md"))
+        callback.assert_any_call("modified", Path("/tmp/new-note.md"))
+
+    def test_on_moved_indexes_atomic_replace_destination(self):
+        """Editors that write a temp file and rename it over the target emit only a move."""
+        callback = MagicMock()
+        handler = _MarkdownHandler(callback, debounce_ms=10)
+
+        handler.on_moved(FileMovedEvent("/tmp/note.md.tmp", "/tmp/note.md"))
+        _join_timers(handler)
+
+        callback.assert_called_once_with("modified", Path("/tmp/note.md"))
+
+    def test_on_moved_markdown_to_other_type_only_deletes(self):
+        callback = MagicMock()
+        handler = _MarkdownHandler(callback, debounce_ms=10)
+
+        handler.on_moved(FileMovedEvent("/tmp/note.md", "/tmp/note.txt"))
+        _join_timers(handler)
+
+        callback.assert_called_once_with("deleted", Path("/tmp/note.md"))
+
+    def test_on_moved_filters_destination_but_still_removes_source(self):
+        callback = MagicMock()
+        handler = _MarkdownHandler(callback, debounce_ms=10, path_filter=lambda path: path.name != "ignored.md")
+
+        handler.on_moved(FileMovedEvent("/tmp/visible.md", "/tmp/ignored.md"))
+        _join_timers(handler)
+
+        callback.assert_called_once_with("deleted", Path("/tmp/visible.md"))
+
+    def test_on_moved_ignores_directories_and_unrelated_files(self):
+        callback = MagicMock()
+        handler = _MarkdownHandler(callback, debounce_ms=10)
+
+        handler.on_moved(DirMovedEvent("/tmp/old-dir", "/tmp/new-dir"))
+        handler.on_moved(FileMovedEvent("/tmp/notes.txt", "/tmp/other.txt"))
+
+        assert handler._timers == {}
+        callback.assert_not_called()
+
     def test_lock_used_for_thread_safety(self):
         """Verify _schedule and _fire use the internal lock."""
         callback = MagicMock()
@@ -306,6 +372,34 @@ class TestFileWatcher:
         event_type, path = received[-1]
         assert event_type in ("created", "modified")
         assert path.name == "hello.md"
+
+    def test_atomic_replace_and_rename_reach_callback(self, tmp_path: Path):
+        """Real inotify moves must reindex; create/modify/delete handlers never see them."""
+        received: list[tuple[str, str]] = []
+
+        def callback(event_type: str, path: Path) -> None:
+            received.append((event_type, path.name))
+
+        watcher = FileWatcher([tmp_path], callback, debounce_ms=30)
+        watcher.start()
+        try:
+            note = tmp_path / "note.md"
+            note.write_text("version one\n")
+            _wait_until(lambda: any(name == "note.md" for _, name in received))
+            received.clear()
+
+            temporary = tmp_path / "note.md.tmp"
+            temporary.write_text("version two\n")
+            os.replace(temporary, note)
+            _wait_until(lambda: any(event != "deleted" and name == "note.md" for event, name in received))
+
+            received.clear()
+            renamed = tmp_path / "renamed.md"
+            os.rename(note, renamed)
+            _wait_until(lambda: ("deleted", "note.md") in received)
+            _wait_until(lambda: any(event != "deleted" and name == "renamed.md" for event, name in received))
+        finally:
+            watcher.stop()
 
     def test_default_debounce_ms(self):
         callback = MagicMock()
