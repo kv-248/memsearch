@@ -18,7 +18,7 @@ from .embeddings import EmbeddingProvider, get_provider
 from .index_report import IndexFailure, IndexReport, format_error
 from .io import read_utf8_text_replace
 from .scanner import ScannedFile, scan_paths, should_index_path
-from .store import MilvusStore
+from .store import MilvusStore, source_prefix_filter
 
 logger = logging.getLogger(__name__)
 
@@ -248,8 +248,8 @@ class MemSearch:
         filter_expr = ""
         if source_prefix is not None:
             prefix = str(Path(source_prefix).expanduser().resolve())
-            escaped = prefix.replace("\\", "\\\\").replace('"', '\\"')
-            filter_expr = f'source like "{escaped}%"'
+            # Literal prefix: LIKE would treat "_" and "%" in the path as wildcards.
+            filter_expr = source_prefix_filter(prefix)
 
         embeddings = await self._embedder.embed([query])
         fetch_k = top_k * 3 if self._reranker_model else top_k

@@ -26,6 +26,39 @@ def _escape_filter_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _prefix_upper_bound(prefix: str) -> str | None:
+    """Return the least string strictly after every value that starts with *prefix*.
+
+    Milvus compares VARCHAR fields in UTF-8 byte order, which matches Unicode
+    code-point order. Incrementing the last code point (carrying through
+    ``U+10FFFF``) is therefore an exclusive upper bound for a literal prefix.
+    ``None`` means *prefix* is made only of ``U+10FFFF``, so every string that
+    starts with it is already selected by ``>= prefix``.
+    """
+    chars = list(prefix)
+    while chars:
+        if chars[-1] != "\U0010ffff":
+            chars[-1] = chr(ord(chars[-1]) + 1)
+            return "".join(chars)
+        chars.pop()
+    return None
+
+
+def source_prefix_filter(prefix: str) -> str:
+    """Build a filter for sources that start with the literal *prefix*.
+
+    ``like`` would treat ``_`` and ``%`` in a path as wildcards, so a prefix
+    such as ``/data/my_app`` also matches ``/data/myXapp``. The expression
+    lexer in current Milvus Lite rejects ``\\_`` and ``\\%`` escapes, so the
+    prefix is expressed as a half-open string range instead.
+    """
+    lower = _escape_filter_value(prefix)
+    upper = _prefix_upper_bound(prefix)
+    if upper is None:
+        return f'source >= "{lower}"'
+    return f'source >= "{lower}" and source < "{_escape_filter_value(upper)}"'
+
+
 def _milvus_lite_major() -> int | None:
     """Major version of the installed milvus-lite, or None if it cannot be read."""
     try:
