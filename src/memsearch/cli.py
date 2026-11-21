@@ -585,26 +585,36 @@ def _extract_section(
     """Extract the full section containing the chunk.
 
     Walks backward to find the section heading, then forward to the next
-    heading of equal or higher level (or EOF).
+    heading of equal or higher level (or EOF). A preamble chunk has heading
+    level 0, so its section is the content before the first heading. When
+    the file has no headings, that section is the whole file.
     """
+    if heading_level <= 0:
+        # Preamble chunks have no heading. End the section at the first ATX
+        # heading so later sections, and their turn anchors, stay out.
+        section_end = len(all_lines)
+        for i, line in enumerate(all_lines):
+            if _HEADING_RE.match(line):
+                section_end = i
+                break
+        return "\n".join(all_lines[:section_end]), 1, section_end
+
     # Find section start — walk backward to the heading, starting at the
     # chunk's own first line (clamped in case the file shrank since indexing)
     section_start = start_line - 1  # 0-indexed
-    if heading_level > 0:
-        for i in range(min(start_line, len(all_lines)) - 1, -1, -1):
-            m = _HEADING_RE.match(all_lines[i])
-            if m and len(m.group(1)) <= heading_level:
-                section_start = i
-                break
+    for i in range(min(start_line, len(all_lines)) - 1, -1, -1):
+        m = _HEADING_RE.match(all_lines[i])
+        if m and len(m.group(1)) <= heading_level:
+            section_start = i
+            break
 
     # Find section end — walk forward to the next heading of same or higher level
     section_end = len(all_lines)
-    if heading_level > 0:
-        for i in range(start_line, len(all_lines)):
-            m = _HEADING_RE.match(all_lines[i])
-            if m and len(m.group(1)) <= heading_level:
-                section_end = i
-                break
+    for i in range(start_line, len(all_lines)):
+        m = _HEADING_RE.match(all_lines[i])
+        if m and len(m.group(1)) <= heading_level:
+            section_end = i
+            break
 
     content = "\n".join(all_lines[section_start:section_end])
     return content, section_start + 1, section_end

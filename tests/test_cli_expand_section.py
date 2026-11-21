@@ -23,6 +23,14 @@ DAILY_LOG = (
     "- Added rate limiting to the API.\n"
 )
 
+PREAMBLE_LOG = (
+    "Project intro that should stay in the preamble.\n"
+    "\n"
+    "### 10:01\n"
+    "<!-- session:AAA turn:t1 transcript:/tmp/a.jsonl -->\n"
+    "- Fixed the login redirect bug.\n"
+)
+
 
 def test_extract_section_starts_at_chunk_heading() -> None:
     lines = DAILY_LOG.splitlines()
@@ -262,3 +270,93 @@ def test_expand_no_section_explicit_lines_take_precedence(
         assert f"lines {expected_start}-{expected_end}" in result.output
         assert expected_content in result.output
     assert "### 10:01" not in result.output
+
+
+def test_extract_section_preamble_stops_before_first_heading() -> None:
+    lines = PREAMBLE_LOG.splitlines()
+    chunk = next(c for c in chunk_markdown(PREAMBLE_LOG, "notes.md") if c.heading_level == 0)
+
+    content, start, end = _extract_section(lines, chunk.start_line, chunk.heading_level)
+
+    assert (start, end) == (1, 2)
+    assert content == "Project intro that should stay in the preamble.\n"
+    assert "### 10:01" not in content
+    assert "turn:t1" not in content
+
+
+def test_extract_section_preamble_without_headings_is_the_whole_file() -> None:
+    text = "Just some text without any heading.\n\nMore text."
+    lines = text.splitlines()
+    chunk = chunk_markdown(text, "notes.md")[0]
+
+    content, start, end = _extract_section(lines, chunk.start_line, chunk.heading_level)
+
+    assert chunk.heading_level == 0
+    assert (start, end) == (1, len(lines))
+    assert content == "\n".join(lines)
+
+
+def test_extract_section_preamble_ignores_hash_prefixed_non_heading_lines() -> None:
+    lines = ["intro", "#tag not a heading", "more", "## Real", "body"]
+
+    content, start, end = _extract_section(lines, 1, 0)
+
+    assert (start, end) == (1, 3)
+    assert content == "intro\n#tag not a heading\nmore"
+    assert "body" not in content
+
+
+def test_extract_section_split_preamble_covers_the_whole_preamble() -> None:
+    paragraph = "Paragraph about ordinary indexing behavior and factual notes. "
+    body = "\n\n".join(f"{paragraph}{i}" for i in range(8))
+    text = body + "\n\n## Later\n\nFollowing section should not be included.\n"
+    lines = text.splitlines()
+    first_heading = next(i for i, line in enumerate(lines) if line == "## Later")
+    preamble_chunks = [
+        c for c in chunk_markdown(text, "notes.md", max_chunk_size=400, overlap_lines=0) if c.heading_level == 0
+    ]
+    assert len(preamble_chunks) > 1
+
+    for chunk in preamble_chunks:
+        content, start, end = _extract_section(lines, chunk.start_line, chunk.heading_level)
+        assert (start, end) == (1, first_heading)
+        assert content == "\n".join(lines[:first_heading])
+        assert "## Later" not in content
+        assert "Following section" not in content
+
+
+def test_expand_preamble_does_not_take_the_following_section_anchor(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "notes.md"
+    source.write_text(PREAMBLE_LOG, encoding="utf-8")
+    chunk = next(c for c in chunk_markdown(PREAMBLE_LOG, str(source)) if c.heading_level == 0)
+
+    class FakeStore:
+        def __init__(self, **_kwargs):
+            pass
+
+        def query(self, filter_expr: str):
+            return [
+                {
+                    "source": str(source),
+                    "start_line": chunk.start_line,
+                    "end_line": chunk.end_line,
+                    "heading": chunk.heading,
+                    "heading_level": chunk.heading_level,
+                }
+            ]
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli_module, "resolve_config", lambda _overrides=None: MemSearchConfig())
+    monkeypatch.setattr(store_module, "MilvusStore", FakeStore)
+
+    result = CliRunner().invoke(cli, ["expand", "abc123", "--json-output"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["start_line"] == 1
+    assert data["end_line"] == 2
+    assert data["content"] == "Project intro that should stay in the preamble.\n"
+    assert "anchor" not in data
+    assert "turn:t1" not in data["content"]
