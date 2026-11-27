@@ -128,8 +128,10 @@ PROJECT_BASENAME=$(basename "$PROJECT_DIR")
 COLLECTION_DESC="${PROJECT_BASENAME} | ${PROVIDER}/${MODEL:-default}"
 
 # Capture preexisting memory files before writing the new session heading.
+# -H follows a symlinked memory directory. Without it, find does not descend
+# into the link, so preexisting journals are counted as zero.
 DAILY_JOURNAL_PATTERN='[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md'
-EXISTING_MEMORY_FILES=$(find "$MEMORY_DIR" -maxdepth 1 -type f -name "$DAILY_JOURNAL_PATTERN" 2>/dev/null | sort || true)
+EXISTING_MEMORY_FILES=$(find -H "$MEMORY_DIR" -maxdepth 1 -type f -name "$DAILY_JOURNAL_PATTERN" 2>/dev/null | sort || true)
 EXISTING_MEMORY_COUNT=$(printf '%s\n' "$EXISTING_MEMORY_FILES" | sed '/^$/d' | wc -l | tr -d ' ')
 
 # Write session heading to today's memory file

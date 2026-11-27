@@ -234,7 +234,12 @@ def test_claude_session_start_reports_missing_python(
     assert "memory capture disabled" in status
 
 
-def _run_claude_session_start_with_memory(tmp_path: Path, journals: dict[str, str]) -> str:
+def _run_claude_session_start_with_memory(
+    tmp_path: Path,
+    journals: dict[str, str],
+    *,
+    memory_is_symlink: bool = False,
+) -> str:
     script = Path("plugins/claude-code/hooks/session-start.sh")
     home = tmp_path / "home"
     fake_bin = tmp_path / "bin"
@@ -243,10 +248,17 @@ def _run_claude_session_start_with_memory(tmp_path: Path, journals: dict[str, st
     fake_bin.mkdir()
     (home / ".memsearch").mkdir()
     (home / ".memsearch" / "config.toml").write_text("", encoding="utf-8")
-    memory.mkdir(parents=True)
+    memory.parent.mkdir(parents=True, exist_ok=True)
+    journal_dir = memory
+    if memory_is_symlink:
+        journal_dir = tmp_path / "real-memory"
+        journal_dir.mkdir()
+        memory.symlink_to(journal_dir)
+    else:
+        memory.mkdir(parents=True)
 
     for name, content in journals.items():
-        (memory / name).write_text(content, encoding="utf-8")
+        (journal_dir / name).write_text(content, encoding="utf-8")
 
     _write_executable(
         fake_bin / "memsearch",
@@ -548,6 +560,24 @@ def test_claude_session_start_recent_memory_trims_utf8_on_line_boundaries(tmp_pa
 
     assert "最新记录" in context
     assert len(context.encode("utf-8")) <= 1800
+
+
+def test_claude_session_start_recent_memory_follows_symlinked_memory_dir(tmp_path: Path) -> None:
+    """Recent memory is injected when `.memsearch/memory` is a directory symlink."""
+    journal = """# 2026-01-01
+
+## Session 10:00
+
+### 10:00
+- Remember the symlink journal.
+"""
+    context = _run_claude_session_start_with_memory(
+        tmp_path,
+        {"2026-01-01.md": journal},
+        memory_is_symlink=True,
+    )
+
+    assert "Remember the symlink journal." in context
 
 
 def test_claude_session_start_uv_tool_upgrade_hint_preserves_extras(tmp_path: Path) -> None:
@@ -1665,6 +1695,60 @@ exit 0
     assert "collection: project_collection" in status
     collection_call = next(call for call in calls if call.startswith("config get milvus.collection"))
     assert "--default-collection " in collection_call
+
+
+def test_codex_session_start_counts_journals_behind_symlinked_memory_dir(tmp_path: Path) -> None:
+    """Past-memory context counts journals when `.memsearch/memory` is a symlink."""
+    script = Path("plugins/codex/hooks/session-start.sh")
+    home = tmp_path / "home"
+    (home / ".memsearch").mkdir(parents=True)
+    (home / ".memsearch" / "config.toml").write_text("", encoding="utf-8")
+    memsearch_dir = tmp_path / ".memsearch"
+    memsearch_dir.mkdir()
+    real_memory = tmp_path / "real-memory"
+    real_memory.mkdir()
+    (real_memory / "2020-01-01.md").write_text(
+        "# 2020-01-01\n\n## Session 10:00\n\n- older note\n",
+        encoding="utf-8",
+    )
+    (memsearch_dir / "memory").symlink_to(real_memory)
+    call_log = tmp_path / "memsearch-calls.txt"
+
+    fake_bin = _install_layout(tmp_path / "opt", "9.9.9")
+    _write_executable(
+        fake_bin / "memsearch",
+        """#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MEMSEARCH_CALL_LOG"
+if [ "$1" = "config" ] && [ "$2" = "get" ]; then
+  case "$3" in
+    embedding.provider) echo "onnx" ;;
+    embedding.model) echo "tiny" ;;
+    milvus.uri) echo "/tmp/x.db" ;;
+    milvus.collection) echo "project_collection" ;;
+    *) echo "" ;;
+  esac
+  exit 0
+fi
+exit 0
+""",
+    )
+    _write_executable(fake_bin / "curl", """#!/usr/bin/env bash\necho '{"info":{"version":"9.9.9"}}'\n""")
+    env = _session_start_env(tmp_path, home, fake_bin, call_log)
+    env["MEMSEARCH_PROJECT_DIR"] = str(tmp_path)
+
+    result = subprocess.run(
+        ["bash", str(script)],
+        input=json.dumps({"cwd": str(tmp_path)}),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+
+    context = json.loads(result.stdout).get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "1 past memory file" in context
+    assert "2020-01-01" in context
+    assert (memsearch_dir / "memory").is_symlink()
 
 
 def test_claude_session_start_reads_version_from_dist_info(tmp_path: Path) -> None:
